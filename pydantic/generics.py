@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Tuple, Type, TypeVar, Union, cast, get_type_hints
+import typing
 
 from .class_validators import gather_all_validators
 from .fields import FieldInfo, ModelField
@@ -8,6 +9,48 @@ from .utils import lenient_issubclass
 _generic_types_cache: Dict[Tuple[Type[Any], Union[Any, Tuple[Any, ...]]], Type[BaseModel]] = {}
 GenericModelT = TypeVar('GenericModelT', bound='GenericModel')
 TypeVarType = Any  # since mypy doesn't allow the use of TypeVar as a type
+
+
+def _resolve_alias_type_hint(obj, typevars_map, wrapper=None):
+    print(str(obj))
+    print(obj.__dict__)
+    next = str(obj).split("[")
+    if not isinstance(obj, typing._GenericAlias):
+        if wrapper:
+            print(f"wrapper: {wrapper}")
+            resolved = resolve_type_hint(obj, typevars_map)
+            print(f"resolved: {resolved}")
+            res = GenericModel._create_concrete_name(wrapper, (resolved,))
+            print(res)
+
+            type_hints = get_type_hints(obj).items()
+            instance_type_hints = {k: v for k, v in type_hints if getattr(v, '__origin__', None) is not ClassVar}
+            print(instance_type_hints)
+            print(next)
+            if len(next) > 1:
+                print(obj)
+                print(obj.__dict__)
+                return _convert_types(instance_type_hints, typevars_map)
+            return res
+        return resolve_type_hint(obj, typevars_map)
+    return _resolve_alias_type_hint(obj.__args__[0], typevars_map, next[0])
+
+def _convert_types(instance_type_hints, typevars_map):
+    print("converting types")
+    concrete_type_hints: Dict[str, Type[Any]] = {}
+    for k, v in instance_type_hints.items():
+        print("iteration")
+        print(k)
+        print(v)
+        print(type(v))
+        print(v.__dict__)
+        res = _resolve_alias_type_hint(v, typevars_map)
+        print(f"resolve result: {res}")
+        if isinstance(res, dict):
+            concrete_type_hints.update(res)
+        else:
+            concrete_type_hints[k] = res
+    return concrete_type_hints
 
 
 class GenericModel(BaseModel):
@@ -36,15 +79,19 @@ class GenericModel(BaseModel):
 
         check_parameters_count(cls, params)
         typevars_map: Dict[TypeVarType, Type[Any]] = dict(zip(cls.__parameters__, params))
+        print(f"typevars map: {typevars_map}")
         type_hints = get_type_hints(cls).items()
         instance_type_hints = {k: v for k, v in type_hints if getattr(v, '__origin__', None) is not ClassVar}
         concrete_type_hints: Dict[str, Type[Any]] = {
             k: resolve_type_hint(v, typevars_map) for k, v in instance_type_hints.items()
         }
+        print(f"real concrete hints: {concrete_type_hints}")
+        concrete_type_hints2 = _convert_types(instance_type_hints, typevars_map)
+        print(f"my concrete hints: {concrete_type_hints2}")
 
         model_name = cls.__concrete_name__(params)
         validators = gather_all_validators(cls)
-        fields = _build_generic_fields(cls.__fields__, concrete_type_hints, typevars_map)
+        fields = _build_generic_fields(cls.__fields__, concrete_type_hints2, typevars_map)
         created_model = cast(
             Type[GenericModel],  # casting ensures mypy is aware of the __concrete__ and __parameters__ attributes
             create_model(
@@ -76,6 +123,21 @@ class GenericModel(BaseModel):
         param_names = [param.__name__ if hasattr(param, '__name__') else str(param) for param in params]
         params_component = ', '.join(param_names)
         return f'{cls.__name__}[{params_component}]'
+
+    @staticmethod
+    def _create_concrete_name(obj_name, params):
+        param_names = []
+        for param in params:
+            string_repr = str(param)
+            if not hasattr(param, "__name__"):
+                param_names.append(string_repr)
+            if "__main__" in string_repr:
+                param_names.append(f"__main__.{param.__name__}")
+            else:
+                param_names.append(param.__name__)
+        # param_names = [param.__name__ if hasattr(param, '__name__') else str(param) for param in params]
+        params_component = ', '.join(param_names)
+        return f'{obj_name}[{params_component}]'
 
 
 def resolve_type_hint(type_: Any, typevars_map: Dict[Any, Any]) -> Type[Any]:
