@@ -851,6 +851,9 @@ def create_model(
     if __config__:
         namespace['Config'] = inherit_config(__config__, BaseConfig)
 
+    print(__model_name)
+    print((__base__,))
+    print(namespace)
     return type(__model_name, (__base__,), namespace)
 
 

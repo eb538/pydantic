@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Tuple, Type, TypeVar, Union, cast, get_type_hints
+import typing
 
 from .class_validators import gather_all_validators
 from .fields import FieldInfo, ModelField
@@ -8,6 +9,35 @@ from .utils import lenient_issubclass
 _generic_types_cache: Dict[Tuple[Type[Any], Union[Any, Tuple[Any, ...]]], Type[BaseModel]] = {}
 GenericModelT = TypeVar('GenericModelT', bound='GenericModel')
 TypeVarType = Any  # since mypy doesn't allow the use of TypeVar as a type
+
+
+
+def _resolve_alias_type_hint(obj, typevars_map, wrapper=None):
+    print(str(obj))
+    print(obj.__dict__)
+    if not isinstance(obj, typing._GenericAlias):
+        if wrapper:
+            print(f"wrapper: {wrapper}")
+            res = GenericModel._create_concrete_name(wrapper, (resolve_type_hint(obj, typevars_map),))
+            print(res)
+            return res
+        return resolve_type_hint(obj, typevars_map)
+    return _resolve_alias_type_hint(obj.__args__[0], typevars_map, str(obj).split("[")[0])
+
+def _convert_types(instance_type_hints, typevars_map):
+    print("converting types")
+    concrete_type_hints: Dict[str, Type[Any]] = {}
+    for k, v in instance_type_hints.items():
+        print("iteration")
+        print(k)
+        print(v)
+        print(type(v))
+        print(v.__dict__)
+        res = _resolve_alias_type_hint(v, typevars_map)
+        print(f"resolve result: {res}")
+        concrete_type_hints[k] = res
+    return(concrete_type_hints)
+
 
 
 class GenericModel(BaseModel):
@@ -35,14 +65,22 @@ class GenericModel(BaseModel):
             raise TypeError(f'Type {cls.__name__} must inherit from typing.Generic before being parameterized')
 
         check_parameters_count(cls, params)
+        print(f"show params: {cls.__parameters__}")
         typevars_map: Dict[TypeVarType, Type[Any]] = dict(zip(cls.__parameters__, params))
+        print(typevars_map)
         type_hints = get_type_hints(cls).items()
+        print(cls)
+        print(type(cls))
+        # print(cls.__dict__)
         instance_type_hints = {k: v for k, v in type_hints if getattr(v, '__origin__', None) is not ClassVar}
-        concrete_type_hints: Dict[str, Type[Any]] = {
-            k: resolve_type_hint(v, typevars_map) for k, v in instance_type_hints.items()
-        }
+        print(f"instance type hints: {instance_type_hints}")
+        concrete_type_hints: Dict[str, Type[Any]] = _convert_types(instance_type_hints, typevars_map)
+        print(concrete_type_hints)
 
         model_name = cls.__concrete_name__(params)
+        print("creating model")
+        print(params)
+        print(f"concreate name: {model_name}")
         validators = gather_all_validators(cls)
         fields = _build_generic_fields(cls.__fields__, concrete_type_hints, typevars_map)
         created_model = cast(
@@ -73,9 +111,13 @@ class GenericModel(BaseModel):
         """
         This method can be overridden to achieve a custom naming scheme for GenericModels
         """
+        cls._create_concrete_name(cls.__name__, params)
+
+    @staticmethod
+    def _create_concrete_name(obj_name, params):
         param_names = [param.__name__ if hasattr(param, '__name__') else str(param) for param in params]
         params_component = ', '.join(param_names)
-        return f'{cls.__name__}[{params_component}]'
+        return f'{obj_name}[{params_component}]'
 
 
 def resolve_type_hint(type_: Any, typevars_map: Dict[Any, Any]) -> Type[Any]:
